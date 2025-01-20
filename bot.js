@@ -2,7 +2,10 @@ require("dotenv").config();
 const { Telegraf, Markup } = require("telegraf");
 const mysql = require("mysql2/promise");
 
-// Database Configuration
+// Initialize the bot with the BOT_TOKEN
+const BOT_TOKEN = process.env.BOT_TOKEN;
+
+// Database configuration
 const DB_CONFIG = {
   host: process.env.DB_HOST,
   port: process.env.DB_PORT,
@@ -12,10 +15,13 @@ const DB_CONFIG = {
   charset: "utf8mb4",
 };
 
-// Initialize Telegraf Bot
-const bot = new Telegraf(process.env.BOT_TOKEN);
+// Create a new Telegraf bot instance
+const bot = new Telegraf(BOT_TOKEN);
 
-// Initialize the database and create the botusers table
+// Map to track users in the process of setting their Kaspi details
+const kaspiFlow = new Map();
+
+// Initialize the database and create the botusers table if it doesn't exist
 async function initDB() {
   const conn = await mysql.createConnection(DB_CONFIG);
   await conn.execute(`
@@ -25,26 +31,14 @@ async function initDB() {
       refcount INT DEFAULT 0,
       balance INT DEFAULT 0,
       name VARCHAR(255),
-      invitedby BIGINT
-    )
-  `);
-  await conn.execute(`
-    CREATE TABLE IF NOT EXISTS referrals (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      referrer_id BIGINT,
-      referred_id BIGINT,
-      subscribed BOOLEAN DEFAULT FALSE,
-      FOREIGN KEY (referrer_id) REFERENCES botusers(user_id),
-      FOREIGN KEY (referred_id) REFERENCES botusers(user_id)
+      invitedby BIGINT,
+      kaspi VARCHAR(255) DEFAULT NULL
     )
   `);
   await conn.end();
 }
 
-// Define SUDO_USERS (replace with actual Telegram user IDs)
-const SUDO_USERS = [7943250659]; // Add other admin user IDs as needed
-
-// Start Command Handler
+// Start command handler
 bot.start(async (ctx) => {
   const userId = ctx.from.id;
   const username = ctx.from.username || null;
@@ -69,23 +63,28 @@ bot.start(async (ctx) => {
       );
 
       if (referrerId) {
-        // Increment refcount for the referrer
+        // Increment refcount and balance for the referrer
         await conn.execute(
-          "UPDATE botusers SET refcount = refcount + 1 WHERE user_id = ?",
+          "UPDATE botusers SET refcount = refcount + 1, balance = balance + 38 WHERE user_id = ?",
           [referrerId]
         );
-        await conn.execute("UPDATE botusers SET balance = balance + 38 WHERE user_id = ?", [referrerId]);
       }
     }
 
-    // Send welcome message with inline keyboard
+    // Send welcome message with inline keyboard including "Реквизит" button
     const keyboard = Markup.inlineKeyboard([
       [Markup.button.url("1️⃣ КАНАЛ", "https://t.me/+wtei_zPm4803N2Iy")],
       [Markup.button.url("2️⃣ КАНАЛ", "https://t.me/+f_i1-UN7HdplNGEy")],
       [Markup.button.callback("Тексеру", "check_subscription")],
+ // New Реквизит button
     ]);
+
     await ctx.reply(
-      `Сәлем, ${name}! Сіз демеушілерге жазылмағансыз. Жазылуыңызды өтінемін.`,
+      `Сәлем, ${name}! Сіз демеушілерге жазылмағансыз. Жазылуыңызды өтінемін.\n
+
+Демеушілерге тіркелгеннен кейін табыс табуды бастайсыз!\n
+Адал бол, шынайы табысқа қол жеткіз!\n
+Ақша табудың ең сенімді жолы – адалдықта!\n`,
       keyboard
     );
   } catch (error) {
@@ -96,7 +95,7 @@ bot.start(async (ctx) => {
   }
 });
 
-// Check Subscription Handler
+// Check subscription callback handler
 bot.action("check_subscription", async (ctx) => {
   const userId = ctx.from.id;
 
@@ -109,21 +108,11 @@ bot.action("check_subscription", async (ctx) => {
       ["member", "administrator", "creator"].includes(ch2.status);
 
     if (isSubscribed) {
-      const conn = await mysql.createConnection(DB_CONFIG);
-      try {
-        await conn.execute(
-          "UPDATE botusers SET balance = balance + 10 WHERE user_id = ?",
-          [userId]
-        );
-      } catch (error) {
-        console.error("Error updating balance:", error);
-      } finally {
-        await conn.end();
-      }
+
 
       const mainMenu = Markup.keyboard([
         ["Жеке Кабинет 🙋‍♂️", "Ақша Табу 💵"],
-        ["Ақпарат "],
+        ["Ереже 📚"],
       ]).resize();
       await ctx.reply("<b>Басты мәзір ⤵️</b>", {
         parse_mode: "HTML",
@@ -138,22 +127,32 @@ bot.action("check_subscription", async (ctx) => {
   }
 });
 
-// Personal Cabinet Handler
+// Personal cabinet handler
 bot.hears("Жеке Кабинет 🙋‍♂️", async (ctx) => {
   const userId = ctx.from.id;
   const conn = await mysql.createConnection(DB_CONFIG);
 
   try {
     const [userInfo] = await conn.execute(
-      "SELECT balance, refcount FROM botusers WHERE user_id = ?",
+      "SELECT balance, refcount, kaspi FROM botusers WHERE user_id = ?",
       [userId]
     );
     const balance = userInfo[0]?.balance || 0;
     const refcount = userInfo[0]?.refcount || 0;
+    const kaspi = userInfo[0]?.kaspi || null;
+
+    let kaspiInfo = kaspi
+      ? `Kaspi: ${kaspi}`
+      : "Kaspi: ❌ (Енді қосу үшін 'Реквизит 💳' батырмасын басыңыз)";
+      const keyboard = Markup.inlineKeyboard([
+
+        [Markup.button.callback("Реквизит 💳", "update_kaspi")],
+   // New Реквизит button
+      ]);
 
     await ctx.reply(
-      `Жеке кабинет 🔰\n\n==============================\nБарлық рефералдар саны 📈: ${refcount}\nТабысыңыз: ${balance} тг`
-    );
+      `Жеке кабинет 🔰\n\n==============================\nБарлық рефералдар саны 📈: ${refcount}\nТабысыңыз: ${balance} тг\n${kaspiInfo}`
+    ,keyboard);
   } catch (error) {
     console.error("Error in Жеке Кабинет handler:", error);
     await ctx.reply("Қате пайда болды. Қайтадан көріңіз.");
@@ -162,25 +161,103 @@ bot.hears("Жеке Кабинет 🙋‍♂️", async (ctx) => {
   }
 });
 
-// Earn Money Handler
+// Earn money handler
 bot.hears("Ақша Табу 💵", async (ctx) => {
-  const referralLink = `https://t.me/adal_tenge_bot?start=${ctx.from.id}`;
+  const referralLink = `t.me/adal_tenge_bot?start=${ctx.from.id}`;
+  const name = ctx.from.first_name || "User";
   await ctx.reply(
-    `Ақша табу үшін сілтемеңізді бөлісіңіз 👉\nСізге +38 тг шақырған адамыңыз демеушілерге тіркелгенде берілетін болады💚: ${referralLink}`
+    `🇰🇿 Құрметті, ${name} мен сізге реферал шақыру арқылы табыс табу жолын ұсынғым келеді 💰\n
+( 👤 Әр адам үшін - 38 теңге )\n
+💎 Адам қалай шақырамыз?\n
+┗❗️Сізге берілген сілтемені достарыңызға тарату арқылы реферал жинайсыз, Сілтемені профильіңізге  қондыру арқылы жылдам табыс табасыз 💸\n
+
+🔗 Сіздің Сілтeме:\n
+${referralLink}`
   );
 });
 
-// Info Handlers
-bot.hears("Ақпарат 📚 ", async (ctx) => {
+// Information handler
+bot.hears(/Ереже\s?📚?/, async (ctx) => {
   await ctx.reply(
-    `Бұл бот каналдарға жазылу арқылы , және өз достарыңызбен бөлісу арқылы ақша табуға көмектесетін Қазақстандық бот! \n\n Әрбір тіркелген адам үшін +38 тг берілетін болады😍 `
-  );
-});
-bot.hears("Ақпарат", async (ctx) => {
-  await ctx.reply(
-    `Бұл бот каналдарға жазылу арқылы , және өз достарыңызбен бөлісу арқылы ақша табуға көмектесетін Қазақстандық бот! \n\n Әрбір тіркелген адам үшін +38 тг берілетін болады😍 `
+    "Табысыңыз 300 Tenge-ден асқанда, ақшаныңызды Kaspi арқылы шығара аласыз!\nЖұмысты бастап, табысыңызды арттырып, өз қолыңызбен ақша алуға мүмкіндік жасаңыз!\nЖеке сілтеме арқылы адам жинап, көп ақша таба аласыз!\nБіздің бот өте сенімді.\nЕшкімге ешқандай ақша салмайсыз, сізден ешкім ақша сұрамайды!\nАлаяқтардан сақ болыңыз!\nӘрбір шақырылған адамнан сізге 38 Tenge түседі! "
   );
 });
 
-// Export the bot and initialization functions
-module.exports = { bot, initDB, SUDO_USERS };
+// Handler for the "Реквизит" inline button
+bot.action("update_kaspi", async (ctx) => {
+  const userId = ctx.from.id;
+
+  // Check if the user already has a Kaspi number
+  const conn = await mysql.createConnection(DB_CONFIG);
+  try {
+    const [rows] = await conn.execute(
+      "SELECT kaspi FROM botusers WHERE user_id = ?",
+      [userId]
+    );
+    const kaspi = rows[0]?.kaspi;
+
+    if (kaspi) {
+      await ctx.reply(`Сіздің Kaspi реквизитіңіз: ${kaspi}`);
+    } else {
+      await ctx.reply(
+        "Kaspi реквизитіңізді енгізіңіз (мысалы, +7XXXXXXXXXX):"
+      );
+      kaspiFlow.set(userId, true);
+    }
+  } catch (error) {
+    console.error("Error in update_kaspi handler:", error);
+    await ctx.reply("Қате пайда болды. Қайтадан көріңіз.");
+  } finally {
+    await conn.end();
+  }
+
+  await ctx.answerCbQuery(); // Acknowledge the callback to remove the loading state
+});
+
+// Handler to process user input for Kaspi
+bot.on("text", async (ctx) => {
+  const userId = ctx.from.id;
+
+  if (kaspiFlow.has(userId)) {
+    const input = ctx.message.text.trim();
+
+    // Validate the input: must start with '+' followed by digits, e.g., +7XXXXXXXXXX
+    const kaspiRegex = /^\+7\d{10}$/;
+
+    if (kaspiRegex.test(input)) {
+      const conn = await mysql.createConnection(DB_CONFIG);
+      try {
+        await conn.execute(
+          "UPDATE botusers SET kaspi = ? WHERE user_id = ?",
+          [input, userId]
+        );
+        await ctx.reply("Kaspi реквизитіңіз сәтті сақталды!");
+      } catch (error) {
+        console.error("Error updating Kaspi:", error);
+        await ctx.reply("Қате пайда болды. Қайтадан көріңіз.");
+      } finally {
+        await conn.end();
+        kaspiFlow.delete(userId);
+      }
+    } else {
+      await ctx.reply(
+        "Қате формат! Kaspi реквизитіңізді қайтадан енгізіңіз (мысалы, +7XXXXXXXXXX):"
+      );
+    }
+  }
+});
+
+// Launch the bot
+(async () => {
+  try {
+    await initDB();
+    await bot.launch();
+    console.log("Bot is running...");
+  } catch (error) {
+    console.error("Error launching the bot:", error);
+  }
+})();
+
+// Graceful stop
+process.once("SIGINT", () => bot.stop("SIGINT"));
+process.once("SIGTERM", () => bot.stop("SIGTERM"));
